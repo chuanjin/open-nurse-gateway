@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open Source Digital Nurse Station Simulator</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f7f6; margin: 0; padding: 20px; transition: background 0.5s ease; }
+        .container { max-width: 500px; margin: 40px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center; }
+        .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 20px; }
+        .online { background: #e6f4ea; color: #137333; }
+        .alert-card { display: none; background: #fce8e6; border: 2px solid #ea4335; border-radius: 8px; padding: 20px; margin: 20px 0; animation: pulse 1s infinite alternate; }
+        .alert-title { color: #c5221f; font-size: 24px; font-weight: bold; margin: 0 0 10px 0; }
+        .btn { background: #1a73e8; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; transition: background 0.2s; }
+        .btn:hover { background: #1557b0; }
+        .btn-hangup { background: #ea4335; margin-top: 10px; }
+        .btn-hangup:hover { background: #c5221f; }
+        @keyframes pulse { from { box-shadow: 0 0 10px rgba(234,67,53,0.5); } to { box-shadow: 0 0 25px rgba(234,67,53,1); } }
+        audio { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container" id="mainContainer">
+    <div id="networkStatus" class="status-badge online">● Synchronizing with Gateway...</div>
+    <h2>Mobile Nurse Client (PoC)</h2>
+    <p style="color: #666;">System armed. Listening to translated raw stream from legacy RS485 infrastructure...</p>
+
+    <!-- Real-time Critical Alarm Panel -->
+    <div id="alertCard" class="alert-card">
+        <div class="alert-title">🚨 CRITICAL CALL 🚨</div>
+        <p style="font-size: 18px; margin: 5px 0;">Patient Bed Location: <strong id="bedNumber">--</strong></p>
+        <p style="color: #555; font-size: 14px;">Source: Legacy Bus Trigger mapped to Digital Object Model</p>
+        <button class="btn" id="talkBtn" onclick="startVoiceTalk()">📞 Answer & Establish Voice Intercom</button>
+        <button class="btn btn-hangup" id="hangupBtn" style="display:none;" onclick="hangupVoice()">Disconnect Line</button>
+    </div>
+    
+    <!-- Audio element to stream incoming audio track from the room endpoint -->
+    <audio id="remoteAudio" autoplay></audio>
+</div>
+
+
+<script>
+    let ws;
+    let localStream;
+    let peerConnection;
+    let myClientId = null; // Storing the local runtime instance ID
+    const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }; 
+
+    function initGatewayConnection() {
+        ws = new WebSocket(`ws://${window.location.host}`);
+
+        ws.onopen = () => {
+            document.getElementById('networkStatus').innerText = "● Gateway Linked (Streaming active)";
+            document.getElementById('networkStatus').className = "status-badge online";
+        };
+
+        ws.onmessage = async (event) => {
+            const data = JSON.parse(event.data);
+            
+            // Flow 0: Register unique instance ID sent by backend server
+            if (data.type === 'welcome') {
+                myClientId = data.clientId;
+                console.log("Registered local WebRTC client ID:", myClientId);
+                return;
+            }
+
+            // Flow A: Mapped Hardware Alarms
+            if (data.bed && data.type === 'Emergency') {
+                triggerVisualAlert(data.bed);
+            }
+            
+            // Flow B: Robust WebRTC Signaling Processing
+            if (data.type === 'offer') {
+                console.log("-> Remote Offer discovered. Initializing local pipeline to Answer...");
+                await setupPeerConnection();
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                // Ship Answer payload tagged with our Client ID
+                ws.send(JSON.stringify({
+                    type: 'answer',
+                    sdp: answer.sdp,
+                    senderId: myClientId
+                }));
+                
+                document.getElementById('talkBtn').innerText = "🟢 Active (Connected to Room)";
+                document.getElementById('hangupBtn').style.display = "block";
+
+            } else if (data.type === 'answer') {
+                console.log("-> Valid remote Answer captured. Locking P2P handshake.");
+                if (peerConnection) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
+                    document.getElementById('talkBtn').innerText = "🟢 Active (Handshake Complete)";
+                    document.getElementById('hangupBtn').style.display = "block";
+                }
+            } else if (data.type === 'candidate') {
+                if (peerConnection) {
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    } catch(e) {
+                        console.log("ICE processing delayed due to session sync timing.");
+                    }
+                }
+            }
+        };
+    }
+
+    async function setupPeerConnection() {
+        if (peerConnection) return;
+        
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        } catch (err) {
+            console.error("Microphone hardware block:", err);
+            alert("Microphone execution denied. Check browser tab permissions.");
+            return;
+        }
+
+        peerConnection = new RTCPeerConnection(config);
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+        peerConnection.ontrack = (event) => {
+            document.getElementById('remoteAudio').srcObject = event.streams[0];
+        };
+
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                ws.send(JSON.stringify({ 
+                    type: 'candidate', 
+                    candidate: event.candidate,
+                    senderId: myClientId 
+                }));
+            }
+        };
+    }
+
+    function triggerVisualAlert(bedId) {
+        document.body.style.background = "#fce8e6";
+        document.getElementById('alertCard').style.display = "block";
+        document.getElementById('bedNumber').innerText = "Bed " + bedId;
+    }
+
+    // Activated manually by Caller (The Nurse Station UI)
+    async function startVoiceTalk() {
+        document.getElementById('talkBtn').innerText = "🎙️ Negotiating peer connection topology...";
+        await setupPeerConnection();
+        
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        
+        // Ship Offer payload tagged with our unique Client ID
+        ws.send(JSON.stringify({
+            type: 'offer',
+            sdp: offer.sdp,
+            senderId: myClientId
+        }));
+    }
+
+    function hangupVoice() {
+        if(peerConnection) peerConnection.close();
+        if(localStream) localStream.getTracks().forEach(track => track.stop());
+        peerConnection = null;
+        localStream = null;
+        document.body.style.background = "#f4f7f6";
+        document.getElementById('alertCard').style.display = "none";
+        document.getElementById('hangupBtn').style.display = "none";
+        document.getElementById('talkBtn').innerText = "📞 Answer & Establish Voice Intercom";
+    }
+
+    initGatewayConnection();
+</script>
+
+</body>
+</html>
