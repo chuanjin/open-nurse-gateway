@@ -109,9 +109,23 @@
 
     async function setupPeerConnection() {
         if (peerConnection) return;
-        
+
         try {
-            localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            // =========================================================================
+            // ADVANCED AUDIO CONSTRAINTS: Suppressing Physical Feedback Loops (Howling)
+            // =========================================================================
+            // Forcing the browser and hardware DSP to engage maximum processing capabilities.
+            // This mitigates the close-range acoustic echoes typical during local PoC testing.
+            localStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,      // Actively subtracts speaker output from mic input
+                    noiseSuppression: true,      // Filters out continuous ambient hardware hums
+                    autoGainControl: true,       // Normalizes voice levels to prevent signal clipping
+                    channelCount: 1,             // Mono channel to reduce processing overhead and latency
+                    sampleRate: 16000            // 16kHz wideband voice: optimized balance of clarity and DSP power
+                },
+                video: false
+            });
         } catch (err) {
             console.error("Microphone hardware block:", err);
             alert("Microphone execution denied. Check browser tab permissions.");
@@ -122,15 +136,26 @@
         localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
         peerConnection.ontrack = (event) => {
-            document.getElementById('remoteAudio').srcObject = event.streams[0];
+            const remoteAudio = document.getElementById('remoteAudio');
+
+            // CRITICAL SECURITY CHECK: Ensure we ONLY bind the incoming remote track.
+            // Never allow the localStream to feed back into this DOM element,
+            // otherwise it creates a software-level feedback loop (echo).
+            remoteAudio.srcObject = event.streams[0];
+
+            // Explicitly enforce voice playback properties for the browser engine
+            remoteAudio.setAttribute('autoplay', 'true');
+            remoteAudio.setAttribute('playsinline', 'true');
+
+            console.log("-> Remote track successfully bound to secure output channel.");
         };
 
         peerConnection.onicecandidate = (event) => {
             if (event.candidate) {
-                ws.send(JSON.stringify({ 
-                    type: 'candidate', 
+                ws.send(JSON.stringify({
+                    type: 'candidate',
                     candidate: event.candidate,
-                    senderId: myClientId 
+                    senderId: myClientId
                 }));
             }
         };
