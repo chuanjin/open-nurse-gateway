@@ -1,201 +1,403 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Open Source Digital Nurse Station Simulator</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f7f6; margin: 0; padding: 20px; transition: background 0.5s ease; }
-        .container { max-width: 500px; margin: 40px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center; }
-        .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 20px; }
-        .online { background: #e6f4ea; color: #137333; }
-        .alert-card { display: none; background: #fce8e6; border: 2px solid #ea4335; border-radius: 8px; padding: 20px; margin: 20px 0; animation: pulse 1s infinite alternate; }
-        .alert-title { color: #c5221f; font-size: 24px; font-weight: bold; margin: 0 0 10px 0; }
-        .btn { background: #1a73e8; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; transition: background 0.2s; }
-        .btn:hover { background: #1557b0; }
-        .btn-hangup { background: #ea4335; margin-top: 10px; }
-        .btn-hangup:hover { background: #c5221f; }
-        @keyframes pulse { from { box-shadow: 0 0 10px rgba(234,67,53,0.5); } to { box-shadow: 0 0 25px rgba(234,67,53,1); } }
-        audio { display: none; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Open Nurse Gateway</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f4f7f6; margin: 0; padding: 20px;
+      transition: background 0.5s ease;
+    }
+    .container {
+      max-width: 520px; margin: 40px auto; background: white;
+      padding: 30px; border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.07); text-align: center;
+    }
+    h2 { margin: 0 0 6px; font-size: 20px; }
+    .subtitle { color: #666; font-size: 14px; margin: 0 0 20px; }
+    .badge {
+      display: inline-block; padding: 6px 14px; border-radius: 20px;
+      font-weight: 700; font-size: 13px; margin-bottom: 20px;
+    }
+    .badge-online  { background: #e6f4ea; color: #137333; }
+    .badge-warn    { background: #fff3e0; color: #e65100; }
+    .badge-offline { background: #fce8e6; color: #c5221f; }
+    .alert-card {
+      display: none; background: #fce8e6; border: 2px solid #ea4335;
+      border-radius: 8px; padding: 20px; margin: 20px 0;
+      animation: pulse 1s infinite alternate;
+    }
+    .alert-title { color: #c5221f; font-size: 22px; font-weight: bold; margin: 0 0 8px; }
+    .bed-label { font-size: 18px; margin: 4px 0; }
+    .type-label { color: #555; font-size: 13px; margin: 0 0 14px; }
+    @keyframes pulse {
+      from { box-shadow: 0 0 10px rgba(234,67,53,0.4); }
+      to   { box-shadow: 0 0 25px rgba(234,67,53,0.9); }
+    }
+    .btn {
+      display: block; width: 100%;
+      background: #1a73e8; color: white; border: none;
+      padding: 13px 24px; font-size: 15px; border-radius: 6px;
+      cursor: pointer; font-weight: 700; transition: background 0.2s;
+      margin-top: 8px;
+    }
+    .btn:hover:not(:disabled) { background: #1557b0; }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn-hangup { background: #ea4335; }
+    .btn-hangup:hover:not(:disabled) { background: #c5221f; }
+    .error-msg { color: #c5221f; font-size: 13px; margin-top: 10px; min-height: 18px; }
+    .room-card {
+      background: #e8f5e9; border: 2px solid #43a047;
+      border-radius: 8px; padding: 20px; margin: 20px 0;
+    }
+    .room-title { color: #2e7d32; font-size: 18px; font-weight: bold; margin: 0 0 8px; }
+    audio { display: none; }
+  </style>
 </head>
 <body>
+<div class="container" id="app">
+  <div id="statusBadge" class="badge badge-warn">● Connecting…</div>
+  <h2 id="roleTitle"></h2>
+  <p class="subtitle" id="roleDesc"></p>
 
-<div class="container" id="mainContainer">
-    <div id="networkStatus" class="status-badge online">● Synchronizing with Gateway...</div>
-    <h2>Mobile Nurse Client (PoC)</h2>
-    <p style="color: #666;">System armed. Listening to translated raw stream from legacy RS485 infrastructure...</p>
+  <!-- Nurse: incoming alert panel -->
+  <div id="alertCard" class="alert-card">
+    <div class="alert-title">🚨 INCOMING CALL 🚨</div>
+    <p class="bed-label">Bed: <strong id="bedNumber">--</strong></p>
+    <p class="type-label" id="callTypeLabel"></p>
+    <button class="btn" id="answerBtn" onclick="nurseAnswer()">📞 Answer & Connect Voice</button>
+    <button class="btn btn-hangup" id="hangupBtn" style="display:none" onclick="doHangup()">Disconnect Line</button>
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
 
-    <!-- Real-time Critical Alarm Panel -->
-    <div id="alertCard" class="alert-card">
-        <div class="alert-title">🚨 CRITICAL CALL 🚨</div>
-        <p style="font-size: 18px; margin: 5px 0;">Patient Bed Location: <strong id="bedNumber">--</strong></p>
-        <p style="color: #555; font-size: 14px;">Source: Legacy Bus Trigger mapped to Digital Object Model</p>
-        <button class="btn" id="talkBtn" onclick="startVoiceTalk()">📞 Answer & Establish Voice Intercom</button>
-        <button class="btn btn-hangup" id="hangupBtn" style="display:none;" onclick="hangupVoice()">Disconnect Line</button>
-    </div>
-    
-    <!-- Audio element to stream incoming audio track from the room endpoint -->
-    <audio id="remoteAudio" autoplay></audio>
+  <!-- Room: inbound call panel (shown when nurse calls this room) -->
+  <div id="roomCard" class="room-card" style="display:none">
+    <div class="room-title" id="roomCardTitle">📡 Inbound Call</div>
+    <button class="btn btn-hangup" id="roomHangupBtn" style="display:none" onclick="doHangup()">Disconnect</button>
+    <div class="error-msg" id="roomErrorMsg"></div>
+  </div>
+
+  <audio id="remoteAudio" autoplay playsinline></audio>
 </div>
 
-
 <script>
-    let ws;
-    let localStream;
-    let peerConnection;
-    let myClientId = null; // Storing the local runtime instance ID
-    const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }; 
+'use strict';
 
-    function initGatewayConnection() {
-        ws = new WebSocket(`ws://${window.location.host}`);
+// ── Role detection ─────────────────────────────────────────────────────────
+const params   = new URLSearchParams(window.location.search);
+const MY_ROLE  = params.get('role') === 'room' ? 'room' : 'nurse';
+const MY_BED   = params.get('bedId') || null;
 
-        ws.onopen = () => {
-            document.getElementById('networkStatus').innerText = "● Gateway Linked (Streaming active)";
-            document.getElementById('networkStatus').className = "status-badge online";
-        };
+const isRoom  = MY_ROLE === 'room';
+const isNurse = !isRoom;
 
-        ws.onmessage = async (event) => {
-            const data = JSON.parse(event.data);
-            
-            // Flow 0: Register unique instance ID sent by backend server
-            if (data.type === 'welcome') {
-                myClientId = data.clientId;
-                console.log("Registered local WebRTC client ID:", myClientId);
-                return;
-            }
+if (isRoom && !MY_BED) {
+  document.getElementById('roleTitle').textContent = 'Room endpoint — missing bedId';
+  document.getElementById('roleDesc').textContent = 'Add ?role=room&bedId=102 to the URL.';
+} else {
+  document.getElementById('roleTitle').textContent = isRoom
+    ? `Room Endpoint — Bed ${MY_BED}`
+    : 'Nurse Station';
+  document.getElementById('roleDesc').textContent = isRoom
+    ? 'Waiting for nurse call…'
+    : 'Monitoring legacy RS485 bus — alerts appear below.';
+}
 
-            // Flow A: Mapped Hardware Alarms
-            if (data.bed && data.type === 'Emergency') {
-                triggerVisualAlert(data.bed);
-            }
-            
-            // Flow B: Robust WebRTC Signaling Processing
-            if (data.type === 'offer') {
-                console.log("-> Remote Offer discovered. Initializing local pipeline to Answer...");
-                await setupPeerConnection();
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                
-                // Ship Answer payload tagged with our Client ID
-                ws.send(JSON.stringify({
-                    type: 'answer',
-                    sdp: answer.sdp,
-                    senderId: myClientId
-                }));
-                
-                document.getElementById('talkBtn').innerText = "🟢 Active (Connected to Room)";
-                document.getElementById('hangupBtn').style.display = "block";
+// ── State ──────────────────────────────────────────────────────────────────
+let ws              = null;
+let myClientId      = null;
+let iceServers      = [{ urls: 'stun:stun.l.google.com:19302' }];
+let pc              = null;
+let localStream     = null;
+let activeCallId    = null;
+let activeBed       = null;
+let reconnectMs     = 500;
+let reconnectTimer  = null;
 
-            } else if (data.type === 'answer') {
-                console.log("-> Valid remote Answer captured. Locking P2P handshake.");
-                if (peerConnection) {
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                    document.getElementById('talkBtn').innerText = "🟢 Active (Handshake Complete)";
-                    document.getElementById('hangupBtn').style.display = "block";
-                }
-            } else if (data.type === 'candidate') {
-                if (peerConnection) {
-                    try {
-                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-                    } catch(e) {
-                        console.log("ICE processing delayed due to session sync timing.");
-                    }
-                }
-            }
-        };
+// ── UI helpers ─────────────────────────────────────────────────────────────
+function setStatus(text, cls) {
+  const el = document.getElementById('statusBadge');
+  el.textContent = '● ' + text;
+  el.className = 'badge badge-' + cls;
+}
+
+function setError(msg) {
+  const id = isRoom ? 'roomErrorMsg' : 'errorMsg';
+  document.getElementById(id).textContent = msg || '';
+}
+
+function setAnswerBusy(busy) {
+  const btn = document.getElementById('answerBtn');
+  if (btn) btn.disabled = busy;
+}
+
+// ── /config fetch ──────────────────────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const r = await fetch('/config');
+    if (r.ok) {
+      const data = await r.json();
+      if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+        iceServers = data.iceServers;
+      }
     }
+  } catch (_) { /* use default */ }
+}
 
-    async function setupPeerConnection() {
-        if (peerConnection) return;
+// ── WebSocket ──────────────────────────────────────────────────────────────
+function connect() {
+  if (isRoom && !MY_BED) return;
+  clearTimeout(reconnectTimer);
 
-        try {
-            // =========================================================================
-            // ADVANCED AUDIO CONSTRAINTS: Suppressing Physical Feedback Loops (Howling)
-            // =========================================================================
-            // Forcing the browser and hardware DSP to engage maximum processing capabilities.
-            // This mitigates the close-range acoustic echoes typical during local PoC testing.
-            localStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,      // Actively subtracts speaker output from mic input
-                    noiseSuppression: true,      // Filters out continuous ambient hardware hums
-                    autoGainControl: true,       // Normalizes voice levels to prevent signal clipping
-                    channelCount: 1,             // Mono channel to reduce processing overhead and latency
-                    sampleRate: 16000            // 16kHz wideband voice: optimized balance of clarity and DSP power
-                },
-                video: false
-            });
-        } catch (err) {
-            console.error("Microphone hardware block:", err);
-            alert("Microphone execution denied. Check browser tab permissions.");
-            return;
-        }
+  ws = new WebSocket('ws://' + window.location.host);
 
-        peerConnection = new RTCPeerConnection(config);
-        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+  ws.onopen = () => {
+    reconnectMs = 500;
+    setStatus('Gateway linked', 'online');
+    wsSend({ type: 'hello', role: MY_ROLE, bedId: MY_BED });
+  };
 
-        peerConnection.ontrack = (event) => {
-            const remoteAudio = document.getElementById('remoteAudio');
+  ws.onmessage = async (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch (_) { return; }
+    await dispatch(msg);
+  };
 
-            // CRITICAL SECURITY CHECK: Ensure we ONLY bind the incoming remote track.
-            // Never allow the localStream to feed back into this DOM element,
-            // otherwise it creates a software-level feedback loop (echo).
-            remoteAudio.srcObject = event.streams[0];
+  ws.onclose = () => {
+    setStatus('Disconnected — reconnecting…', 'offline');
+    reconnectTimer = setTimeout(connect, reconnectMs);
+    reconnectMs = Math.min(reconnectMs * 2, 15000);
+  };
 
-            // Explicitly enforce voice playback properties for the browser engine
-            remoteAudio.setAttribute('autoplay', 'true');
-            remoteAudio.setAttribute('playsinline', 'true');
+  ws.onerror = () => { /* onclose fires too */ };
+}
 
-            console.log("-> Remote track successfully bound to secure output channel.");
-        };
+function wsSend(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
 
-        peerConnection.onicecandidate = (event) => {
-            if (event.candidate) {
-                ws.send(JSON.stringify({
-                    type: 'candidate',
-                    candidate: event.candidate,
-                    senderId: myClientId
-                }));
-            }
-        };
+// ── Message dispatcher ─────────────────────────────────────────────────────
+async function dispatch(msg) {
+  switch (msg.type) {
+    case 'welcome':
+      myClientId = msg.clientId;
+      if (Array.isArray(msg.iceServers) && msg.iceServers.length > 0) {
+        iceServers = msg.iceServers;
+      }
+      break;
+
+    case 'alert':
+      if (isNurse) showAlert(msg);
+      break;
+
+    case 'offer':
+      if (isRoom) await handleOffer(msg);
+      break;
+
+    case 'answer':
+      if (isNurse) await handleAnswer(msg);
+      break;
+
+    case 'candidate':
+      await handleCandidate(msg);
+      break;
+
+    case 'hangup':
+      handleHangup(msg);
+      break;
+
+    case 'error':
+      setError('Server: ' + (msg.reason || 'unknown error'));
+      setAnswerBusy(false);
+      break;
+  }
+}
+
+// ── Alert (nurse only) ─────────────────────────────────────────────────────
+function showAlert(msg) {
+  activeBed = msg.bed;
+  document.body.style.background = '#fce8e6';
+  document.getElementById('alertCard').style.display = 'block';
+  document.getElementById('bedNumber').textContent = msg.bed;
+  document.getElementById('callTypeLabel').textContent = msg.type + ' call via legacy bus';
+  document.getElementById('hangupBtn').style.display = 'none';
+  setAnswerBusy(false);
+  setError('');
+}
+
+// ── Nurse answers ──────────────────────────────────────────────────────────
+async function nurseAnswer() {
+  setAnswerBusy(true);
+  setError('');
+
+  try {
+    await openLocalStream();
+  } catch (e) {
+    setError('Microphone denied: ' + e.message);
+    setAnswerBusy(false);
+    return;
+  }
+
+  activeCallId = crypto.randomUUID();
+  buildPeerConnection();
+
+  let offer;
+  try {
+    offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+  } catch (e) {
+    setError('Offer failed: ' + e.message);
+    setAnswerBusy(false);
+    teardown();
+    return;
+  }
+
+  wsSend({ type: 'offer', callId: activeCallId, sdp: offer.sdp, targetBed: activeBed });
+
+  document.getElementById('answerBtn').textContent = '🎙️ Negotiating…';
+}
+
+// ── Room receives offer ────────────────────────────────────────────────────
+async function handleOffer(msg) {
+  activeCallId = msg.callId;
+
+  try {
+    await openLocalStream();
+  } catch (e) {
+    setError('Microphone denied: ' + e.message);
+    return;
+  }
+
+  buildPeerConnection();
+
+  try {
+    await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+  } catch (e) {
+    setError('Answer failed: ' + e.message);
+    teardown();
+    return;
+  }
+
+  wsSend({ type: 'answer', callId: activeCallId, sdp: pc.localDescription.sdp });
+
+  document.getElementById('roomCard').style.display = 'block';
+  document.getElementById('roomCardTitle').textContent = '📡 Active call — bed ' + MY_BED;
+  document.getElementById('roomHangupBtn').style.display = 'block';
+}
+
+// ── Nurse gets answer ──────────────────────────────────────────────────────
+async function handleAnswer(msg) {
+  if (!pc || msg.callId !== activeCallId) return;
+  try {
+    await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+  } catch (e) {
+    setError('Remote description failed: ' + e.message);
+    return;
+  }
+  document.getElementById('answerBtn').textContent = '🟢 Connected';
+  document.getElementById('answerBtn').disabled = true;
+  document.getElementById('hangupBtn').style.display = 'block';
+}
+
+// ── ICE candidate ──────────────────────────────────────────────────────────
+async function handleCandidate(msg) {
+  if (!pc || msg.callId !== activeCallId) return;
+  try {
+    await pc.addIceCandidate(msg.candidate);
+  } catch (_) { /* late candidate — ignore */ }
+}
+
+// ── Hangup ─────────────────────────────────────────────────────────────────
+function handleHangup(msg) {
+  if (msg.callId && msg.callId !== activeCallId) return;
+  teardown();
+}
+
+function doHangup() {
+  if (activeCallId) {
+    wsSend({ type: 'hangup', callId: activeCallId });
+  }
+  teardown();
+}
+
+// ── PeerConnection ─────────────────────────────────────────────────────────
+function buildPeerConnection() {
+  if (pc) { try { pc.close(); } catch (_) {} }
+  pc = new RTCPeerConnection({ iceServers });
+
+  if (localStream) {
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  }
+
+  pc.ontrack = (evt) => {
+    const audio = document.getElementById('remoteAudio');
+    audio.srcObject = evt.streams[0];
+  };
+
+  pc.onicecandidate = (evt) => {
+    if (evt.candidate && activeCallId) {
+      wsSend({ type: 'candidate', callId: activeCallId, candidate: evt.candidate.toJSON() });
     }
+  };
 
-    function triggerVisualAlert(bedId) {
-        document.body.style.background = "#fce8e6";
-        document.getElementById('alertCard').style.display = "block";
-        document.getElementById('bedNumber').innerText = "Bed " + bedId;
+  pc.onconnectionstatechange = () => {
+    if (pc && (pc.connectionState === 'failed' || pc.connectionState === 'disconnected')) {
+      setError('Connection lost');
+      teardown();
     }
+  };
+}
 
-    // Activated manually by Caller (The Nurse Station UI)
-    async function startVoiceTalk() {
-        document.getElementById('talkBtn').innerText = "🎙️ Negotiating peer connection topology...";
-        await setupPeerConnection();
-        
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        
-        // Ship Offer payload tagged with our unique Client ID
-        ws.send(JSON.stringify({
-            type: 'offer',
-            sdp: offer.sdp,
-            senderId: myClientId
-        }));
-    }
+async function openLocalStream() {
+  if (localStream) return;
+  localStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+    },
+    video: false,
+  });
+}
 
-    function hangupVoice() {
-        if(peerConnection) peerConnection.close();
-        if(localStream) localStream.getTracks().forEach(track => track.stop());
-        peerConnection = null;
-        localStream = null;
-        document.body.style.background = "#f4f7f6";
-        document.getElementById('alertCard').style.display = "none";
-        document.getElementById('hangupBtn').style.display = "none";
-        document.getElementById('talkBtn').innerText = "📞 Answer & Establish Voice Intercom";
-    }
+function teardown() {
+  if (pc) { try { pc.close(); } catch (_) {} pc = null; }
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+  const audio = document.getElementById('remoteAudio');
+  audio.srcObject = null;
+  activeCallId = null;
 
-    initGatewayConnection();
+  if (isNurse) {
+    document.body.style.background = '#f4f7f6';
+    document.getElementById('alertCard').style.display = 'none';
+    document.getElementById('hangupBtn').style.display = 'none';
+    document.getElementById('answerBtn').textContent = '📞 Answer & Connect Voice';
+    setAnswerBusy(false);
+    activeBed = null;
+  }
+
+  if (isRoom) {
+    document.getElementById('roomCard').style.display = 'none';
+    document.getElementById('roomHangupBtn').style.display = 'none';
+    document.getElementById('roomCardTitle').textContent = '📡 Inbound Call';
+  }
+
+  setError('');
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+loadConfig().then(connect);
 </script>
-
 </body>
 </html>

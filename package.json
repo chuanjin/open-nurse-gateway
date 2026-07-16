@@ -1,17 +1,35 @@
 {
   "name": "open-nurse-gateway",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "MIT",
+  "version": "0.2.0",
+  "description": "Software-defined middleware gateway bridging legacy RS485/serial nurse-call telemetry into modern WebSocket + WebRTC voice intercom.",
+  "main": "server.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "start:with-mock-source": "node scripts/mock-legacy-source.js & node server.js",
+    "mock-source": "node scripts/mock-legacy-source.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [
+    "nurse-call",
+    "healthcare",
+    "webrtc",
+    "websocket",
+    "gateway",
+    "legacy-modernization",
+    "rs485",
+    "signaling"
+  ],
+  "author": "Open Nurse Gateway Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chuanjin/open-nurse-gateway.git"
+  },
   "dependencies": {
-    "serialport": "^13.0.0",
     "ws": "^8.21.0"
   }
 }

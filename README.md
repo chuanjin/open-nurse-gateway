@@ -1,161 +1,221 @@
 # Open Nurse Gateway (ONG)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js version](https://img.shields.io/badge/Node.js-%3E%3D16.0.0-green.svg)](https://nodejs.org/)
+[![Node.js version](https://img.shields.io/badge/Node.js-%3E%3D20.0.0-green.svg)](https://nodejs.org/)
 
-**Open Nurse Gateway** is a software-defined, open-source middleware gateway designed to bridge mission-critical legacy nurse call systems directly into modern cloud-native topologies, mobile Progressive Web Apps (PWAs), and real-time WebRTC communication layers.
+**Open Nurse Gateway** is a software-defined, open-source middleware gateway that bridges mission-critical legacy nurse call systems into modern cloud-native topologies, mobile Progressive Web Apps (PWAs), and real-time WebRTC communication layers.
 
-By decoupling the asynchronous hardware control plane from the real-time audio transport layer, this architecture enables legacy clinical networks to achieve modern smartphone-native, echo-cancelled voice intercom with **zero structural rewiring**, minimal capital expenditure, and complete liability isolation for primary OEMs.
+By decoupling the asynchronous hardware control plane from the real-time audio transport layer, legacy clinical networks can achieve smartphone-native, echo-cancelled voice intercom with **zero structural rewiring**, minimal capital expenditure, and complete liability isolation for primary OEMs.
 
-## ⚡ The Challenge & Solution
+---
+
+## ⚡ The Problem & Solution
 
 ### The Legacy Deadlock
 
-Across healthcare facilities and care homes, older nurse call installations represent massive unamortized capital investments. These platforms rely on rugged physical topologies like **RS485 serial buses** and dedicated analog voice lines. While their telemetry is highly reliable, they lack the native mobility and modern digital voice capabilities required by modern clinical workflows.
-
-### The VoIP Retrofit Fallacy
-
-Prior modernization attempts involved "forklift upgrades" or trying to run Voice over IP (VoIP) packets directly onto low-baud serial bus frames (e.g., trying to encapsulate audio within serial commands). These universally fail due to:
-
-- **Bandwidth Saturation:** Overloading low-baud rates (typically 9600 Baud).
-- **Hardware Buffer Overflows:** Crashing legacy micro-controllers.
-- **Acoustic Feedback Loops:** Extreme howling due to lack of echo cancellation.
+Older nurse call installations rely on rugged RS485 serial buses and dedicated analog voice lines. Their telemetry is highly reliable, but they lack the mobility and digital voice capabilities required by modern clinical workflows.
 
 ### The Software-Defined Paradigm Shift
 
-Open Nurse Gateway circumvents physical bus constraints via a **Data Abstraction Layer (DAL)**. The copper wiring is left uncompromised. The gateway acts as a high-speed translator:
+Open Nurse Gateway circumvents physical bus constraints via a **Data Abstraction Layer (DAL)**:
 
-1. **Asynchronous Ingest:** Translates proprietary serial bus strings (like `ATC XXYY XXYY`) into web-standard JSON telemetry objects:
+1. **TCP Ingest** — A legacy hardware controller (or the included mock) connects over TCP and streams ATC-style frames (`ATC 0066 0066\n`). The gateway parses them into JSON telemetry:
 
    ```json
-   {
-     "bed": "102",
-     "type": "Emergency",
-     "timestamp": 1783382400000
-   }
+   { "bed": "102", "type": "Emergency", "timestamp": 1783382400000 }
    ```
 
-2. **WebRTC Selective Signaling Engine:** When a call is answered, WebRTC initiates a peer-to-peer (P2P), encrypted audio link directly between the ward room endpoint and the nurse's mobile device, completely bypassing the gateway for audio transmission and offloading echo cancellation directly to the modern browser engine.
+2. **WebSocket Broadcast** — Telemetry is pushed to all connected nurse clients over WebSocket as an `alert` message.
+
+3. **WebRTC Selective Signaling** — When a nurse answers, the gateway routes an SDP offer to the specific room endpoint identified by `bedId`. Audio flows peer-to-peer, bypassing the gateway entirely. Echo cancellation runs in the browser.
 
 ---
 
-## 🛠️ Key Architectural Components
+## 🛠️ Architecture
 
-### 1. Asynchronous Control Plane Ingestion
+```
++---------------------+      +---------------------------+      +--------------------+
+| Legacy RS485 / Mock |      | Open Nurse Gateway (Node) |      |  Nurse Client (PWA)|
++---------------------+      +---------------------------+      +--------------------+
+         |                              |                              |
+         |-- TCP: ATC 0066 0066\n ----->|                              |
+         |                              |-- WebSocket: alert(bed:102)->|
+         |                              |                              |-- Answer pressed
+         |                              |<-- WS: offer(callId, SDP) --|
+         |                              |-- WS: offer forwarded ------>|  Room Endpoint
+         |                              |<-- WS: answer --------------|
+         |                              |-- WS: answer forwarded ----->|
+         |                              |                              |
+         |                              |      WebRTC P2P audio ======>|
+```
 
-Monitors the legacy serial bus via an isolated TCP socket or serial connection (utilizing `serialport`).
+### Modules
 
-### 2. Selective WebSockets Signaling
-
-Manages connections and tags instances with unique Client IDs (`crypto.randomUUID()`). A **custom selective broadcaster** is implemented to prevent signaling feedback loops (loopback) by forwarding WebRTC SDP handshakes only to other peer clients.
-
-### 3. Client Voice DSP Constraints
-
-Enforces advanced audio constraints to suppress physical feedback loops:
-
-- **Echo Cancellation** & **Noise Suppression**
-- **Auto Gain Control**
-- **Mono channel configuration** to reduce processing overhead.
-- **16kHz wideband voice** optimized for speech clarity over standard Wi-Fi.
+| Module | Responsibility |
+|---|---|
+| `src/config.js` | Env-variable config with typed defaults and fail-fast validation |
+| `src/logger.js` | Zero-dep structured JSON logger (stdout, one line per event) |
+| `src/parser.js` | Pure ATC frame parser — LF/CRLF, cross-chunk buffering, redundancy check |
+| `src/ingest.js` | TCP server for legacy source connections — ACK/NAK per frame, oversize guard |
+| `src/schema.js` | WebSocket wire message validator — drops unknown/malformed messages |
+| `src/auth.js` | WS upgrade auth — origin allowlist + optional bearer token |
+| `src/gateway.js` | Signaling core — client sessions, call routing, rate limiting |
+| `server.js` | Bootstrap — wires all modules, HTTP routes, mock injector |
+| `scripts/mock-legacy-source.js` | Standalone TCP client simulating an RS485 hardware controller |
 
 ---
 
-## 🗺️ System Topology
+## 🚀 Quick Start
 
-```text
-+-------------------+      +---------------------------+      +--------------------+      +-------------------------+
-| Legacy RS485 Bus  |      | Open Nurse Gateway (Node) |      | Nurse Client (PWA) |      | Room Endpoint Simulator |
-+-------------------+      +---------------------------+      +--------------------+      +-------------------------+
-          |                              |                              |                              |
-          |--- (1) RS485 Interrupt ----->|                              |                              |
-          |    Bed 102 Calling           |                              |                              |
-          |    (ATC command)             |                              |                              |
-          |                              |-- [Parse telemetry to JSON]  |                              |
-          |                              |                              |                              |
-          |                              |--- (2) WebSocket Broadcast ->|                              |
-          |                              |    Bed 102 Emergency         |                              |
-          |                              |                              |-- [Highlight UI red &]       |
-          |                              |                              |   [Prompt user gesture]      |
-          |                              |                              |                              |
-          |                              |<-- (3) WebSocket Offer ------|                              |
-          |                              |    (WebRTC, Client A ID)     |                              |
-          |                              |                              |                              |
-          |                              |--- (4) Forward Offer (Selective Broadcast) ---------------->|
-          |                              |                                                             |
-          |                              |<-- (5) WebSocket Answer (WebRTC, Client B ID) --------------|
-          |                              |                              |                              |
-          |                              |--- (6) Forward Answer ------>|                              |
-          |                              |    (Selective Broadcast)     |                              |
-          |                              |                              |                              |
-          |                              |                              |<== (7) WebRTC P2P ICE ======>|
-          |                              |                              |    Negotiation               |
-          |                              |                              |                              |
-          |                              |                              |<============================>|
-          |                              |                              |  (8) Secure, Echo-Cancelled  |
-          |                              |                              |      P2P Voice Stream        |
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) v20+
+
+### Install
+
+```bash
+git clone https://github.com/chuanjin/open-nurse-gateway.git
+cd open-nurse-gateway
+npm install
+```
+
+### Run with built-in mock injector
+
+```bash
+MOCK_INJECTOR_ENABLED=1 node server.js
+```
+
+Open two browser tabs:
+
+- **Nurse tab**: `http://localhost:3000/`
+- **Room tab**: `http://localhost:3000/?role=room&bedId=102`
+
+After ~15 seconds the mock injector fires an alert for bed 102. Hit **Answer** on the nurse tab to start WebRTC signaling.
+
+### Run with standalone mock source
+
+```bash
+# Terminal 1
+node server.js
+
+# Terminal 2
+node scripts/mock-legacy-source.js
+```
+
+Or both together:
+
+```bash
+npm run start:with-mock-source
 ```
 
 ---
 
-## 🚀 Quick Start (Development / PoC Simulator)
+## 🖥️ Client Roles
 
-This repository includes a fully functional local simulator containing a Node.js signaling server and an HTML5 dashboard.
+The single `index.html` serves both roles, detected from URL parameters:
 
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) (v16+)
-
-### Installation
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/chuanjin/open-nurse-gateway.git
-   cd open-nurse-gateway
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   npm install
-   ```
-
-### Running the Simulator
-
-1. Launch the server:
-
-   ```bash
-   node server.js
-   ```
-
-2. Open your browser and navigate to:
-   [http://localhost:3000](http://localhost:3000)
-3. Open a second, separate browser window/tab at [http://localhost:3000](http://localhost:3000) to simulate another client.
-4. Wait 15 seconds. The server's built-in **PoC Mock Interrupt Injector** will trigger a random bed alert.
-5. Tap **Answer & Establish Voice Intercom** on one screen to begin WebRTC signaling and establish local P2P audio loop.
-
-#### Interface Preview
-
-|      1. Inbound Call Alert      |        2. Active Intercom Line         |
-| :-----------------------------: | :------------------------------------: |
-| ![Inbound Call Alert](call.png) | ![Active Intercom Line](connected.png) |
+| URL | Role | Behaviour |
+|---|---|---|
+| `http://localhost:3000/` | **Nurse** | Receives alerts, answers calls, initiates WebRTC offer |
+| `http://localhost:3000/?role=room&bedId=102` | **Room endpoint** | Registered as bed 102, receives offer, sends answer |
 
 ---
 
-## ⚠️ Important Production Considerations
+## ⚙️ Configuration
 
-### 1. HTTPS Context Execution
+All configuration is via environment variables. Defaults produce a working PoC with no env set.
 
-Web browsers require a **Secure Context (HTTPS)** to access microphone hardware (`navigator.mediaDevices.getUserMedia`). For production deployments on Local Area Networks (LAN), the gateway must be deployed behind a TLS termination proxy (such as Nginx, Caddy, or Traefik) or provisioned with valid certificates.
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | HTTP + WebSocket listen port |
+| `INGEST_PORT` | `4001` | TCP port for legacy source connections |
+| `INGEST_ENABLED` | `1` | Set to `0` to disable TCP ingest |
+| `INGEST_BIND_HOST` | `127.0.0.1` | Bind address for TCP ingest |
+| `INGEST_MAX_LINE_BYTES` | `512` | Max bytes per ingest frame line |
+| `AUTH_TOKEN` | _(none)_ | If set, WS clients must supply `?token=<value>` |
+| `ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated WS origin allowlist, or `*` |
+| `ICE_SERVERS` | Google STUN | JSON array, e.g. `[{"urls":"stun:stun.example.com:3478"}]` |
+| `MSG_MAX_BYTES` | `65536` | Max WebSocket message size (bytes) |
+| `RATE_LIMIT_PER_SEC` | `50` | Max WS messages per second per client |
+| `MOCK_INJECTOR_ENABLED` | `0` | Set to `1` to enable random alert injection |
+| `MOCK_INJECTOR_INTERVAL_MS` | `15000` | Interval between mock alerts (ms) |
+| `LOG_LEVEL` | `info` | One of `error`, `warn`, `info`, `debug` |
 
-### 2. User Gesture Restrictions
+---
 
-Mobile web sandboxes block automated background audio playbacks or microphone activation triggered by asynchronous WebSocket messages. The application explicitly maps inbound signaling to an **interactive user tap ("Answer")**, ensuring hardware initialization is anchored to a direct user gesture.
+## 🧪 Tests
 
-### 3. Regulatory and Liability Separation
+```bash
+npm test
+```
 
-Under European medical device regulations, updating proprietary software on primary life-safety nurse call controllers is subject to complex and costly recertification.
-By releasing the Open Nurse Gateway under the permissive **MIT License**, the core software is provided "AS IS" with no warranty. This allows primary manufacturers to successfully isolate compliance boundaries and legal liability when bridging legacy hardware to modern IP topologies.
+Uses the Node.js built-in `node:test` runner — no extra dependencies needed.
+
+| Test file | Coverage |
+|---|---|
+| `tests/parser.test.js` | Frame parsing, redundancy check, streaming buffer |
+| `tests/schema.test.js` | Wire message validation for all message types |
+| `tests/auth.test.js` | Origin allowlist, bearer token extraction, constant-time compare |
+| `tests/config.test.js` | Env parsing, ICE JSON validation, fail-fast on bad input |
+| `tests/gateway.test.js` | Offer routing, answer, candidate, hangup, rate limit, size limit |
+| `tests/ingest.test.js` | TCP ACK/NAK, cross-chunk framing, oversize kill, concurrent sources |
+| `tests/server.test.js` | HTTP routes, security headers, WS upgrade auth integration |
+
+---
+
+## 🔌 Wire Protocol
+
+WebSocket messages are JSON objects with a `type` field. The gateway validates all inbound messages — unknown or malformed messages are silently dropped.
+
+### Client → Server
+
+| Type | Required fields | Description |
+|---|---|---|
+| `hello` | `role` (`nurse`\|`room`), `bedId` (string, room only) | Register identity after connect |
+| `offer` | `callId` (UUID string ≤64), `sdp`, `targetBed` | Nurse initiates call to a room bed |
+| `answer` | `callId`, `sdp` | Room responds to offer |
+| `candidate` | `callId`, `candidate` (object) | ICE candidate exchange |
+| `hangup` | `callId` | End call |
+
+### Server → Client
+
+| Type | Fields | Description |
+|---|---|---|
+| `welcome` | `clientId`, `iceServers` | Sent on connect — confirms session ID and ICE config |
+| `alert` | `bed`, `type`, `timestamp` | Legacy telemetry broadcast to nurses |
+| `offer` | `callId`, `sdp` | Forwarded offer (server → room) |
+| `answer` | `callId`, `sdp` | Forwarded answer (server → nurse) |
+| `candidate` | `callId`, `candidate` | Forwarded ICE candidate |
+| `hangup` | `callId` | Call terminated (by peer or on disconnect) |
+| `error` | `callId`, `reason` | Signaling error (e.g. `target-offline`, `duplicate-callId`) |
+
+### TCP Ingest (legacy source → gateway)
+
+Frames are ASCII lines terminated with `\n` or `\r\n`:
+
+```
+ATC 0066 0066\n   → Emergency, bed 102
+NRS 00CD 00CD\n   → Nurse call, bed 205
+STF 012D 012D\n   → Staff call, bed 1-45
+```
+
+Prefixes: `ATC` = Emergency, `NRS` = Nurse, `STF` = Staff. The 4-hex-char address is doubled for redundancy — mismatched halves are rejected. The gateway responds `ACK\n` on success, `NAK\n` on malformed frames, and destroys the connection on oversize lines.
+
+---
+
+## ⚠️ Production Considerations
+
+### HTTPS Required
+
+Browsers require a Secure Context (HTTPS) for microphone access (`getUserMedia`). For LAN deployments, place the gateway behind a TLS termination proxy (Nginx, Caddy, Traefik) or provision self-signed certificates.
+
+### User Gesture Restriction
+
+Mobile browsers block microphone activation from asynchronous WebSocket messages. The UI maps inbound alerts to an explicit **Answer** tap, ensuring hardware initialization is anchored to a direct user gesture.
+
+### Regulatory Separation
+
+Under European medical device regulations, modifying primary life-safety nurse call controller software requires costly recertification. By running Open Nurse Gateway as a sidecar — without touching the primary hardware — facilities maintain the OEM's certified software boundary. The MIT license explicitly provides the gateway "AS IS" with no warranty, supporting clear liability isolation.
 
 ---
 
