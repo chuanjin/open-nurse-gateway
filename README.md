@@ -7,6 +7,8 @@
 
 By decoupling the asynchronous hardware control plane from the real-time audio transport layer, legacy clinical networks can achieve smartphone-native, echo-cancelled voice intercom with **zero structural rewiring**, minimal capital expenditure, and complete liability isolation for primary OEMs.
 
+![Open Nurse Gateway architecture](assets/images/screenshot.png)
+
 ---
 
 ## ⚡ The Problem & Solution
